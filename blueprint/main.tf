@@ -66,6 +66,18 @@ resource "google_bigquery_dataset" "analytics_dataset" {
   depends_on = [google_project_service.bigquery]
 }
 
+resource "google_bigquery_dataset" "bigquery_dataset_name_delivery" {
+  dataset_id = "${var.bigquery_dataset_name_delivery}"
+  location   = var.region
+  depends_on = [google_project_service.bigquery]
+}
+
+resource "google_bigquery_dataset" "bigquery_dataset_name_enriched" {
+  dataset_id = "${var.bigquery_dataset_name_enriched}"
+  location   = var.region
+  depends_on = [google_project_service.bigquery]
+}
+
 # Table with the schema matching the Dataflow job's output
 resource "google_bigquery_table" "summary_table" {
   dataset_id = google_bigquery_dataset.analytics_dataset.dataset_id

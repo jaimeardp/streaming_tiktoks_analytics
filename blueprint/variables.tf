@@ -26,6 +26,19 @@ variable "bigquery_dataset_name" {
   default     = "tiktok_analytics_raw"
 }
 
+variable "bigquery_dataset_name_delivery" {
+  description = "The name for the BigQuery dataset."
+  type        = string
+  default     = "tiktok_analytics_delivery"
+}
+
+variable "bigquery_dataset_name_enriched" {
+  description = "The name for the BigQuery dataset."
+  type        = string
+  default     = "tiktok_analytics_enriched"
+}
+
+
 variable "bigquery_table_name" {
   description = "The name for the BigQuery table for aggregated results."
   type        = string
