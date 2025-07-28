@@ -29,6 +29,15 @@ def get_reversed_timestamp_micros(dt_object: datetime) -> int:
     timestamp_micros = int(dt_object.timestamp() * 1_000_000)
     return (2**63 - 1) - timestamp_micros
 
+# Data Masking Function for any identifier
+def mask_identifier(identifier: str) -> str:
+    """Masks a username or ID for public display."""
+    if not identifier or len(identifier) <= 4:
+        return "****"
+    # Show the first two characters, fill the middle with asterisks, and show the last two characters.
+    return f"{identifier[:2]}{'*' * (len(identifier) - 4)}{identifier[-2:]}"
+
+
 # --- API Endpoints ---
 @app.route('/streams/<string:room_id>/feed', methods=['GET'])
 def get_live_feed(room_id):
@@ -40,17 +49,20 @@ def get_live_feed(room_id):
     feed = []
     for row in rows:
         cells = row.cells.get(COLUMN_FAMILY_ID, {})
-        # CHANGED: Get diamond value to calculate USD equivalent
         diamond_value = int(cells.get(b'originalGift.diamond_value', [b'0'])[0].value)
         usd_value = diamond_value * DIAMOND_TO_USD_RATE
         
+        # Get the raw identifiers before masking them
+        player_name_raw = cells.get(b'playerName', [b''])[0].value.decode('utf-8')
+        player_id_raw = cells.get(b'playerId', [b''])[0].value.decode('utf-8')
+        
         feed.append({
-            'playerId': cells.get(b'playerId', [b''])[0].value.decode('utf-8'),
-            'playerName': cells.get(b'playerName', [b''])[0].value.decode('utf-8'),
+            'playerId': mask_identifier(player_id_raw), # MASKED
+            'playerName': mask_identifier(player_name_raw), # MASKED
             'giftValue': int(cells.get(b'giftValue', [b'0'])[0].value),
             'giftType': cells.get(b'giftType', [b''])[0].value.decode('utf-8'),
             'originalGiftName': cells.get(b'originalGift.name', [b''])[0].value.decode('utf-8'),
-            'usd_value': round(usd_value, 4), # NEW: Add USD value to each gift
+            'usd_value': round(usd_value, 4),
             'timestamp': row.cells[COLUMN_FAMILY_ID][b'timestamp'][0].timestamp.isoformat()
         })
     return jsonify(feed)
@@ -58,7 +70,7 @@ def get_live_feed(room_id):
 
 @app.route('/streams/<string:room_id>/leaderboard', methods=['GET'])
 def get_leaderboard(room_id):
-    """Calculates a leaderboard, sorted by total USD value."""
+    """Calculates a leaderboard, sorted by total USD value, with masked player names."""
     minutes = int(request.args.get('minutes', 5))
     filter_type = request.args.get('type')
 
@@ -71,6 +83,8 @@ def get_leaderboard(room_id):
     scores = defaultdict(int)
     usd_scores = defaultdict(float)
     player_names = {}
+    # Store the raw player IDs to use as keys, but masked IDs for display
+    player_id_map = {}
 
     for row in rows:
         cells = row.cells.get(COLUMN_FAMILY_ID, {})
@@ -79,34 +93,32 @@ def get_leaderboard(room_id):
         if filter_type and current_type != filter_type:
             continue
 
-        player_id = cells.get(b'playerId', [b''])[0].value.decode('utf-8')
+        player_id_raw = cells.get(b'playerId', [b''])[0].value.decode('utf-8')
         gift_value = int(cells.get(b'giftValue', [b'0'])[0].value)
         diamond_value = int(cells.get(b'originalGift.diamond_value', [b'0'])[0].value)
 
-        # Aggregate both scores
-        usd_scores[player_id] += diamond_value * DIAMOND_TO_USD_RATE
-        scores[player_id] += gift_value
+        usd_scores[player_id_raw] += diamond_value * DIAMOND_TO_USD_RATE
+        scores[player_id_raw] += gift_value
         
-        if player_id not in player_names:
-            player_names[player_id] = cells.get(b'playerName', [b''])[0].value.decode('utf-8')
+        if player_id_raw not in player_names:
+            player_name_raw = cells.get(b'playerName', [b''])[0].value.decode('utf-8')
+            player_names[player_id_raw] = mask_identifier(player_name_raw) # MASKED
+            player_id_map[player_id_raw] = mask_identifier(player_id_raw) # MASKED
             
-    # CHANGED: Sort by the usd_scores dictionary instead of the game currency scores.
     sorted_scores_by_usd = sorted(usd_scores.items(), key=lambda item: item[1], reverse=True)
     
-    # CHANGED: Build the final list from the USD-sorted list.
     leaderboard_result = [
         {
             'rank': i + 1,
-            'playerId': pid,
-            'playerName': player_names.get(pid, ''),
-            'totalValue': scores.get(pid, 0), # Get corresponding game currency value
-            'totalUSD': round(usd_score, 4)   # This is the value we sorted by
+            'playerId': player_id_map.get(pid, '****'),
+            'playerName': player_names.get(pid, '****'),
+            'totalValue': scores.get(pid, 0),
+            'totalUSD': round(usd_score, 4)
         }
         for i, (pid, usd_score) in enumerate(sorted_scores_by_usd)
     ]
 
     return jsonify({
-        # CHANGED: Clarify that the ranking is now based on USD
         "ranking_by": "totalUSD",
         "leaderboard": leaderboard_result[:10]
     })
@@ -122,14 +134,12 @@ def get_summary(room_id):
     rows = table.read_rows(start_key=start_key, end_key=end_key)
 
     currency_totals = defaultdict(int)
-    grand_total_usd = 0.0 # NEW: Initialize USD total
+    grand_total_usd = 0.0
 
     for row in rows:
         cells = row.cells.get(COLUMN_FAMILY_ID, {})
         gift_type = cells.get(b'giftType', [b''])[0].value.decode('utf-8')
         gift_value = int(cells.get(b'giftValue', [b'0'])[0].value)
-
-        # NEW: Calculate and aggregate total USD value
         diamond_value = int(cells.get(b'originalGift.diamond_value', [b'0'])[0].value)
         grand_total_usd += diamond_value * DIAMOND_TO_USD_RATE
 
@@ -139,7 +149,7 @@ def get_summary(room_id):
     return jsonify({
         "time_window_minutes": minutes,
         "currency_totals": currency_totals,
-        "grand_total_usd": round(grand_total_usd, 4) # NEW: Add grand total USD to summary
+        "grand_total_usd": round(grand_total_usd, 4)
     })
 
 if __name__ == "__main__":
